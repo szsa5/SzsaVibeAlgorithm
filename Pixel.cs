@@ -6,14 +6,13 @@ using System.Threading.Tasks;
 
 namespace SzsaVibeAlgorithm
 {
-    internal class Pixel
+    public class VibeModel
     {
-
         public Color Color { get; set; }
 
         public bool IsForegroundPixel { get; set; }
 
-        public Pixel(Color color, bool isForegroundPixel)
+        public VibeModel(Color color, bool isForegroundPixel)
         {
             Color = color;
             IsForegroundPixel = isForegroundPixel;
