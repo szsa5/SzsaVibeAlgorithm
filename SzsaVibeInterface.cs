@@ -1,12 +1,14 @@
 using Emgu.CV;
 using Emgu.CV.Structure;
 using System;
+using System.Diagnostics;
+using System.Text;
 
 namespace SzsaVibeAlgorithm
 {
     public partial class SzsaVibeInterface : Form
     {
-         VideoCapture capture;
+        VideoCapture capture;
          bool isPlaying = false;
          int totalFrames;
          int currentFrameNum;
@@ -14,15 +16,17 @@ namespace SzsaVibeAlgorithm
          int fps;
          int width;
          int height;
+        
+        int totalMatches;
 
-         static int numOfSamples = 20;
-         static int radius = 20;
-         static int minCardinality = 2;
-         static int updateFactor = 16;
+        static int numOfSamples = 20;
+        static int radius = 10;
+        static int minCardinality = 2;
+        static int updateFactor = 16;
 
         static Random random = new Random();
 
-        VibeModel[][,] bgModelArray;
+        Color[,,] bgModelBuffer;
         int[][,] binaryMaskArray;
 
         public SzsaVibeInterface()
@@ -44,7 +48,7 @@ namespace SzsaVibeAlgorithm
             }
         }
 
-        private async void PlayVideo()
+        private void PlayVideo()
         {
             if (capture == null)
                 return;
@@ -61,17 +65,16 @@ namespace SzsaVibeAlgorithm
                     capture.Read(currentFrame);
                     Bitmap bitmapFrame = currentFrame.ToBitmap();
 
-
                     // If first frame, initialize background models
                     if (currentFrameNum == 0)
                     {
                         width = bitmapFrame.Width;
                         height = bitmapFrame.Height;
-                        bgModelArray = InitBgModels(bitmapFrame);
+                        bgModelBuffer = InitBgModels(bitmapFrame);
                     }
-                        
 
                     //Classify frame into binary mask
+                    Debug.WriteLine($"Classifying frame {currentFrameNum}");
                     int [,] binaryMask = ClassifyFrame(bitmapFrame);
                     binaryMaskArray[currentFrameNum] = binaryMask;
 
@@ -79,6 +82,8 @@ namespace SzsaVibeAlgorithm
                     currentFrameNum += 1;
                     //await Task.Delay(1000 / fps);
                 }
+
+
                 WriteVideo(binaryMaskArray);
             }
             catch (Exception ex)
@@ -91,11 +96,13 @@ namespace SzsaVibeAlgorithm
         {
 
             // Create a VideoWriter to save the frames as a video
-            VideoWriter writer = new VideoWriter("output.mp4", VideoWriter.Fourcc('X', '2', '6', '4'), fps, new Size(width, height), true);
+            using VideoWriter writer = new VideoWriter("output.mp4", VideoWriter.Fourcc('X', '2', '6', '4'), fps, new Size(width, height), true);
 
             // Loop through each frame and convert the 2D int array into an Image<Rgb, byte>
-            foreach (var frame in frames)
+            for (int i = 0; i < frames.Length; i++)
             {
+                var frame = frames[i];
+
                 // Create a new Image<Rgb, byte> to represent the frame
                 Image<Rgb, byte> frameImage = new Image<Rgb, byte>(width, height);
 
@@ -105,6 +112,7 @@ namespace SzsaVibeAlgorithm
                     for (int x = 0; x < width; x++)
                     {
                         // Convert the 0s and 1s to black and white color
+
                         Rgb color = (frame[x, y] == 0) ? new Rgb(0, 0, 0) : new Rgb(255, 255, 255);
 
                         // Set the color of the pixel in the frame image
@@ -115,40 +123,51 @@ namespace SzsaVibeAlgorithm
                 writer.Write(frameImage);
             }
 
-            // Release the resources and close the writer
-            writer.Dispose();
-
             MessageBox.Show("Video generated successfully.");
         }
 
         private int[,] ClassifyFrame(Bitmap bitmapFrame)
         {
-            int[,] binaryMask = new int[bitmapFrame.Width, bitmapFrame.Height];
-            int currentMatches = 0;
+            int[,] binaryMask = new int[width, height];
+            
 
             // Loop through each pixel in the Bitmap
-            for (int y = 0; y < bitmapFrame.Height; y++)
+            for (int y = 0; y < height; y++)
             {
-                for (int x = 0; x < bitmapFrame.Width; x++)
+                for (int x = 0; x < width; x++)
                 {
+                    int curMemPos = 0;
+                    int currentMatches = 0;
                     for (int i = 0; i < numOfSamples; i++)
                     {
                         // Get the pixel value at (x, y)
                         Color currentPixelColor = bitmapFrame.GetPixel(x, y);
 
-                        VibeModel bgModelFrame = bgModelArray[i][x, y];
+                        Color bgModelPixel = bgModelBuffer[i, x, y];
 
-                        // Calculate distance from background model pixel
-                        int distance = Math.Abs(bgModelFrame.Color.R - currentPixelColor.R) +
-                                        Math.Abs(bgModelFrame.Color.G - currentPixelColor.G) +
-                                        Math.Abs(bgModelFrame.Color.B - currentPixelColor.B);
-                        if (distance <= 4.5 * radius)
+                        // Calculate distance from background model
+
+                        int distance = Math.Abs(currentPixelColor.R - bgModelPixel.R) +
+                                        Math.Abs(currentPixelColor.G - bgModelPixel.G) +
+                                        Math.Abs(currentPixelColor.B - bgModelPixel.B);
+
+                        if (distance <= (4.5 * radius))
                             currentMatches++;
 
+                        
                         if (currentMatches >= minCardinality)
                         {
+
                             // Classify pixel as background and break
                             binaryMask[x, y] = 0;
+
+                            /*
+                            // TODO: SWAP MATCHES TO FIRST POSITIONS OF BUFFER?
+                            VibeModel swap = bgModelBuffer[curMjemPos, x,y];
+                            bgModelBuffer[curMemPos, x,y] = bgModelPixel;
+                            bgModelBuffer[i, x, y] = swap;
+                            curMemPos += 1;
+                            */
                             break;
                         }
                     }
@@ -157,6 +176,7 @@ namespace SzsaVibeAlgorithm
                     {
                         // Classify pixel as foreground
                         binaryMask[x, y] = 1;
+                        totalMatches++;
                     }
                 }
             }
@@ -164,13 +184,15 @@ namespace SzsaVibeAlgorithm
             return binaryMask;
         }
 
-        private static VibeModel[][,] InitBgModels(Bitmap bitmapFrame)
+        private void SwapBuffer(VibeModel model)
         {
-            VibeModel[][,] bgModelArray = new VibeModel[numOfSamples][,];
+        }
+
+        private static Color[,,] InitBgModels(Bitmap bitmapFrame)
+        {
+            Color[,,] bgModelArray = new Color[numOfSamples, bitmapFrame.Width, bitmapFrame.Height];
             for (int i = 0; i < numOfSamples; i++)
             {
-                // Create a 2D array to store pixel values
-                VibeModel[,] pixels = new VibeModel[bitmapFrame.Width, bitmapFrame.Height];
 
                 // Loop through each pixel in the Bitmap
                 for (int y = 0; y < bitmapFrame.Height; y++)
@@ -184,13 +206,11 @@ namespace SzsaVibeAlgorithm
                         Color noisyPixelColor = AddNoiseToColor(pixelColor);
 
                         // Create pixel object, set to background pixel
-                        VibeModel pixel = new(noisyPixelColor, false);
-
                         // Store the pixel value in the array
-                        pixels[x, y] = pixel;
+                        bgModelArray[i,x,y] = noisyPixelColor;
+                        
                     }
                 }
-                bgModelArray[i] = pixels;
             }
             return bgModelArray;
         }
@@ -237,5 +257,6 @@ namespace SzsaVibeAlgorithm
             pictureBox1.Image = null;
             pictureBox1.Invalidate();
         }
+
     }
 }
