@@ -10,21 +10,17 @@ namespace SzsaVibeAlgorithm
     {
         VideoCapture capture;
          bool isPlaying = false;
-         int totalFrames;
          int currentFrameNum;
          Mat currentFrame;
+         int totalFrames;
          int fps;
          int width;
          int height;
-        
-        int totalMatches;
 
-        static int numOfSamples = 20;
-        static int radius = 10;
-        static int minCardinality = 2;
-        static int updateFactor = 16;
-
-        static Random random = new Random();
+        const int numOfSamples = 20;
+        const int radius = 10;
+        const int minCardinality = 2;
+        const int updateFactor = 16;
 
         Color[,,] bgModelBuffer;
         int[][,] binaryMaskArray;
@@ -57,6 +53,10 @@ namespace SzsaVibeAlgorithm
             currentFrame = new Mat();
             currentFrameNum = 0;
             binaryMaskArray = new int[totalFrames][,];
+
+            // Start timer
+            Stopwatch stopwatch = Stopwatch.StartNew();
+
             try
             {
                 while (isPlaying == true && currentFrameNum < totalFrames)
@@ -74,15 +74,23 @@ namespace SzsaVibeAlgorithm
                     }
 
                     //Classify frame into binary mask
-                    Debug.WriteLine($"Classifying frame {currentFrameNum}");
+                    Debug.WriteLine($"Classifying frame {currentFrameNum} / {totalFrames} " +
+                                    $"({Math.Round(currentFrameNum / (double)totalFrames * 100, 2)}%)");
+
                     int [,] binaryMask = ClassifyFrame(bitmapFrame);
                     binaryMaskArray[currentFrameNum] = binaryMask;
+
+                    // Update the model
+                    UpdateBgModel(bitmapFrame);
 
                     //pictureBox1.Image = currentFrame.ToBitmap();
                     currentFrameNum += 1;
                     //await Task.Delay(1000 / fps);
                 }
 
+                stopwatch.Stop();
+                double elapsedTime = stopwatch.ElapsedMilliseconds / 1000.0;
+                Debug.WriteLine($"It took {elapsedTime}s to generate the output.");
 
                 WriteVideo(binaryMaskArray);
             }
@@ -138,6 +146,7 @@ namespace SzsaVibeAlgorithm
                 {
                     int curMemPos = 0;
                     int currentMatches = 0;
+
                     for (int i = 0; i < numOfSamples; i++)
                     {
                         // Get the pixel value at (x, y)
@@ -163,11 +172,12 @@ namespace SzsaVibeAlgorithm
 
                             /*
                             // TODO: SWAP MATCHES TO FIRST POSITIONS OF BUFFER?
-                            VibeModel swap = bgModelBuffer[curMjemPos, x,y];
+                            Color swap = bgModelBuffer[curMemPos, x,y];
                             bgModelBuffer[curMemPos, x,y] = bgModelPixel;
                             bgModelBuffer[i, x, y] = swap;
                             curMemPos += 1;
                             */
+
                             break;
                         }
                     }
@@ -176,7 +186,6 @@ namespace SzsaVibeAlgorithm
                     {
                         // Classify pixel as foreground
                         binaryMask[x, y] = 1;
-                        totalMatches++;
                     }
                 }
             }
@@ -186,6 +195,7 @@ namespace SzsaVibeAlgorithm
 
         private void SwapBuffer(VibeModel model)
         {
+            throw new NotImplementedException();
         }
 
         private static Color[,,] InitBgModels(Bitmap bitmapFrame)
@@ -193,7 +203,6 @@ namespace SzsaVibeAlgorithm
             Color[,,] bgModelArray = new Color[numOfSamples, bitmapFrame.Width, bitmapFrame.Height];
             for (int i = 0; i < numOfSamples; i++)
             {
-
                 // Loop through each pixel in the Bitmap
                 for (int y = 0; y < bitmapFrame.Height; y++)
                 {
@@ -215,8 +224,66 @@ namespace SzsaVibeAlgorithm
             return bgModelArray;
         }
 
+        private void UpdateBgModel(Bitmap bitmapFrame)
+        {
+            //TODO: Optimize
+
+            int randomUpdateValue = new Random().Next(1, updateFactor + 1);
+            if (randomUpdateValue == 1)
+            {
+                int randomSampleValue = new Random().Next(0, numOfSamples);
+                // Loop through each pixel in the Bitmap
+                for (int y = 0; y < bitmapFrame.Height; y++)
+                {
+                    for (int x = 0; x < bitmapFrame.Width; x++)
+                    {
+                        if (binaryMaskArray[currentFrameNum][x, y] == 0)
+                            bgModelBuffer[randomSampleValue, x, y] = bitmapFrame.GetPixel(x, y);
+
+                        int randomEightValue = new Random().Next(0, updateFactor + 1);
+
+                        if (randomEightValue == 1)
+                        {
+                            // Replace value chosen from the bg buffer by pixel value chosen from the 8-neighbourhood
+                            Tuple<int,int> randomNeighborTuple = GetRandomNeighbor(height, width, x, y);
+                            int eightX = randomNeighborTuple.Item1;
+                            int eightY = randomNeighborTuple.Item2;
+                            Color eightPixel = bitmapFrame.GetPixel(eightX, eightY);
+                            bgModelBuffer[randomSampleValue, eightX, eightY] = eightPixel;
+                        }
+                    }
+                }
+            }
+        }
+
+        public static Tuple<int, int> GetRandomNeighbor(int rows, int cols, int x, int y)
+        {
+            Random random = new Random();
+
+            //TODO: Optimize
+            do
+            {
+                int[] dx = { -1, 0, 1, -1, 1, -1, 0, 1 }; // Relative X-coordinates of the 8 neighbors
+                int[] dy = { -1, -1, -1, 0, 0, 1, 1, 1 }; // Relative Y-coordinates of the 8 neighbors
+
+                int randomOffset = random.Next(8);
+
+                int nx = x + dx[randomOffset];
+                int ny = y + dy[randomOffset];
+
+                if (nx >= 0 && nx < rows && ny >= 0 && ny < cols)
+                {
+                    return Tuple.Create(nx, ny); // Return the random neighbor
+                }
+            } while (true);
+        }
+    
+
         public static Color AddNoiseToColor(Color color)
         {
+
+            Random random = new();
+
             int maxNoise = 3;
             int red = color.R;
             int green = color.G;
