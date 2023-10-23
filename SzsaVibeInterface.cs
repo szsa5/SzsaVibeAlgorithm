@@ -10,18 +10,20 @@ namespace SzsaVibeAlgorithm
     public partial class SzsaVibeInterface : Form
     {
         VideoCapture capture;
-         bool isPlaying = false;
-         int currentFrameNum;
-         Mat currentFrame;
-         int totalFrames;
-         int fps;
-         int width;
-         int height;
+        bool isPlaying = false;
+        int currentFrameNum;
+        Mat currentFrame;
+        int totalFrames;
+        int fps;
+        int width;
+        int height;
 
         const int numOfSamples = 20;
         const int radius = 20;
         const int minCardinality = 2;
         const int updateFactor = 16;
+
+        const int numOfPixelsToCompare = 20000;
 
         Color[,,] bgModelBuffer;
         int[][,] binaryMaskArray;
@@ -29,20 +31,6 @@ namespace SzsaVibeAlgorithm
         public SzsaVibeInterface()
         {
             InitializeComponent();
-        }
-
-        private void selectFileButton_Click(object sender, EventArgs e)
-        {
-            OpenFileDialog ofd = new OpenFileDialog();
-            ofd.Filter = "Video Files (*.mp4, *.avi)| *.mp4;*.avi";
-
-            if (ofd.ShowDialog() == DialogResult.OK)
-            {
-                capture = new VideoCapture(ofd.FileName);
-                totalFrames = Convert.ToInt32(capture.Get(Emgu.CV.CvEnum.CapProp.FrameCount));
-                fps = Convert.ToInt32(capture.Get(Emgu.CV.CvEnum.CapProp.Fps));
-                PlayVideo();
-            }
         }
 
         private void PlayVideo()
@@ -58,35 +46,46 @@ namespace SzsaVibeAlgorithm
             // Start timer
             Stopwatch stopwatch = Stopwatch.StartNew();
 
-            //try
-            //{
+            try
+            {
                 while (isPlaying == true && currentFrameNum < totalFrames)
                 {
                     capture.Set(Emgu.CV.CvEnum.CapProp.PosFrames, currentFrameNum);
                     capture.Read(currentFrame);
+                    bool isFirstFrame = currentFrameNum == 0;
                     Bitmap bitmapFrame = currentFrame.ToBitmap();
 
                     // If first frame, initialize background models
-                    if (currentFrameNum == 0)
+                    if (isFirstFrame)
                     {
                         width = bitmapFrame.Width;
                         height = bitmapFrame.Height;
-                        bgModelBuffer = InitBgModels(bitmapFrame);
                     }
 
-                    //Classify frame into binary mask
+                    // Lock bitmap
+                    Rectangle rect = new Rectangle(0, 0, width, height);
+                    BitmapData bmpData = bitmapFrame.LockBits(rect, ImageLockMode.ReadWrite, bitmapFrame.PixelFormat);
+
+                    if (isFirstFrame)
+                        bgModelBuffer = InitBgModels(bmpData);  
+                    else
+                        if(CameraMoved(bmpData))
+                            bgModelBuffer = InitBgModels(bmpData);
+
+                    // Classify frame into binary mask
                     Debug.WriteLine($"Classifying frame {currentFrameNum + 1} / {totalFrames} " +
                                     $"({Math.Round(currentFrameNum / (double)totalFrames * 100, 2)}%)");
 
-                    int [,] binaryMask = ClassifyFrame(bitmapFrame);
+                    int [,] binaryMask = ClassifyFrame(bmpData);
                     binaryMaskArray[currentFrameNum] = binaryMask;
 
                     // Update the model
-                    UpdateBgModel(bitmapFrame);
+                    UpdateBgModel(bmpData);
 
-                    //pictureBox1.Image = currentFrame.ToBitmap();
-                    currentFrameNum += 1;
-                    //await Task.Delay(1000 / fps);
+                // Unlock bitmap
+                bitmapFrame.UnlockBits(bmpData);
+
+                currentFrameNum += 1;
                 }
 
                 stopwatch.Stop();
@@ -94,14 +93,13 @@ namespace SzsaVibeAlgorithm
                 Debug.WriteLine($"It took {elapsedTime}s to generate the output.");
 
                 WriteVideo(binaryMaskArray);
-            //}
-            //catch (Exception ex)
-            //{
-                //MessageBox.Show(ex.Message);
-                //Debug.WriteLine(ex.Message);
-            //}
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message);
+                Debug.WriteLine(ex.Message);
+            }
         }
-
         private void WriteVideo(int[][,] frames)
         {
 
@@ -136,32 +134,26 @@ namespace SzsaVibeAlgorithm
             MessageBox.Show("Video generated successfully.");
         }
 
-        private int[,] ClassifyFrame(Bitmap bitmapFrame)
+        private int[,] ClassifyFrame(BitmapData bmpData)
         {
             int[,] binaryMask = new int[width, height];
-
-            // Lock bitmap
-            Rectangle rect = new Rectangle(0, 0, width, height);
-            BitmapData bmpData = bitmapFrame.LockBits(rect,ImageLockMode.ReadWrite, bitmapFrame.PixelFormat);
 
             // Loop through each pixel in the Bitmap
             Parallel.For(0, height, y =>
             {
-                Parallel.For(0, width, x =>
+                for(int x = 0; x < width; x++)
                 {
-                    int curMemPos = 0;
+                    //int curMemPos = 0;
                     int currentMatches = 0;
 
                     for (int i = 0; i < numOfSamples; i++)
                     {
-
                         // Get the pixel value at (x, y)
                         Color currentPixelColor = GetPixelColor(bmpData, x, y);
 
                         Color bgModelPixel = bgModelBuffer[i, x, y];
 
                         // Calculate distance from background model
-
                         int distance = Math.Abs(currentPixelColor.R - bgModelPixel.R) +
                                         Math.Abs(currentPixelColor.G - bgModelPixel.G) +
                                         Math.Abs(currentPixelColor.B - bgModelPixel.B);
@@ -193,16 +185,15 @@ namespace SzsaVibeAlgorithm
                         // Classify pixel as foreground
                         binaryMask[x, y] = 1;
                     }
-                });
+                }
             });
 
-            // Unlock bitmap
-            bitmapFrame.UnlockBits(bmpData);
+
 
             return binaryMask;
         }
 
-        public Color GetPixelColor(BitmapData bmpData, int x, int y)
+        public static Color GetPixelColor(BitmapData bmpData, int x, int y)
         {
             // Calculate the index of the pixel
             int stride = bmpData.Stride;
@@ -226,34 +217,35 @@ namespace SzsaVibeAlgorithm
             throw new NotImplementedException();
         }
 
-        private static Color[,,] InitBgModels(Bitmap bitmapFrame)
+        private Color[,,] InitBgModels(BitmapData bmpData)
         {
-            Color[,,] bgModelArray = new Color[numOfSamples, bitmapFrame.Width, bitmapFrame.Height];
+            Color[,,] bgModelArray = new Color[numOfSamples, width, height];
 
-            for (int i = 0; i < numOfSamples; i++)
+            // Iterate through each bgModel
+            Parallel.For(0, numOfSamples, i =>
             {
-                // Loop through each pixel in the Bitmap
-                for (int y = 0; y < bitmapFrame.Height; y++)
+                // Iterate through each pixel in the Bitmap
+                Parallel.For(0, height, y =>
                 {
-                    for (int x = 0; x < bitmapFrame.Width; x++)
+                    Parallel.For(0, width, x =>
                     {
                         // Get the pixel value at (x, y)
-                        Color pixelColor = bitmapFrame.GetPixel(x, y);
+                        Color pixelColor = GetPixelColor(bmpData, x, y);
 
                         // Add noise
                         Color noisyPixelColor = AddNoiseToColor(pixelColor);
 
                         // Create pixel object, set to background pixel
                         // Store the pixel value in the array
-                        bgModelArray[i,x,y] = noisyPixelColor;
-                        
-                    }
-                }
-            }
+                        bgModelArray[i, x, y] = noisyPixelColor;
+
+                    });
+                });
+            });
             return bgModelArray;
         }
 
-        private void UpdateBgModel(Bitmap bitmapFrame)
+        private void UpdateBgModel(BitmapData bmpData)
         {
             //TODO: Optimize
 
@@ -262,14 +254,14 @@ namespace SzsaVibeAlgorithm
             {
                 int randomSampleIndex = new Random().Next(0, numOfSamples);
                 // Loop through each pixel in the Bitmap
-                for (int y = 0; y < bitmapFrame.Height; y++)
+                Parallel.For(0, height, y =>
                 {
-                    for (int x = 0; x < bitmapFrame.Width; x++)
+                    for (int x = 0; x < width; x++)
                     {
                         if (binaryMaskArray[currentFrameNum][x, y] == 0)
-                            bgModelBuffer[randomSampleIndex, x, y] = bitmapFrame.GetPixel(x, y);
+                            bgModelBuffer[randomSampleIndex, x, y] = GetPixelColor(bmpData, x, y);
                         else
-                            continue;
+                            return;
 
                         int randomEightUpdateChance = new Random().Next(1, updateFactor + 1);
 
@@ -279,13 +271,13 @@ namespace SzsaVibeAlgorithm
                             Tuple<int, int> randomNeighborOffset = GetRandomNeighborOffset(height, width, x, y);
                             int eightX = randomNeighborOffset.Item1;
                             int eightY = randomNeighborOffset.Item2;
-                            Color eightPixel = bitmapFrame.GetPixel(eightX, eightY);
+                            Color eightPixel = GetPixelColor(bmpData, eightX, eightY);
 
                             // Replace value chosen from the bg buffer by pixel value chosen from the 8-neighbourhood
                             bgModelBuffer[randomSampleIndex, eightX, eightY] = eightPixel;
                         }
                     }
-                }
+                });
             }
         }
 
@@ -348,6 +340,41 @@ namespace SzsaVibeAlgorithm
             return Color.FromArgb(color.A, red, green, blue);
         }
 
+        public bool CameraMoved(BitmapData bitmapData)
+        {
+            int width = bitmapData.Width;
+            int height = bitmapData.Height;
+
+            bool cameraMoved = true;
+
+            Random random = new();
+            //Parallel.For(0, numOfPixelsToCompare, i =>
+            //{
+            for(int i = 0; numOfPixelsToCompare > i; i++)
+            {
+                int x = random.Next(0, width);
+                int y = random.Next(0, height);
+
+                // Get color from the bitmapData
+                Color bitmapColor = GetPixelColor(bitmapData, x, y);
+
+                Color bgColor = bgModelBuffer[0, x, y];
+
+                // Compare with corresponding Color object from bgModel
+                if (bitmapColor == bgModelBuffer[0, x, y])
+                {
+                    cameraMoved = false;
+                    break;
+                }
+            }
+
+            if (cameraMoved)
+            {
+                Debug.WriteLine("Camera moved");
+            }
+            return cameraMoved;
+        }
+
         private void BtnPlay_Click_1(object sender, EventArgs e)
         {
             if (capture != null)
@@ -368,5 +395,18 @@ namespace SzsaVibeAlgorithm
             pictureBox1.Invalidate();
         }
 
+        private void selectFileButton_Click(object sender, EventArgs e)
+        {
+            OpenFileDialog ofd = new OpenFileDialog();
+            ofd.Filter = "Video Files (*.mp4, *.avi)| *.mp4;*.avi";
+
+            if (ofd.ShowDialog() == DialogResult.OK)
+            {
+                capture = new VideoCapture(ofd.FileName);
+                totalFrames = Convert.ToInt32(capture.Get(Emgu.CV.CvEnum.CapProp.FrameCount));
+                fps = Convert.ToInt32(capture.Get(Emgu.CV.CvEnum.CapProp.Fps));
+                PlayVideo();
+            }
+        }
     }
 }
