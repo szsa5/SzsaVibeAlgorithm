@@ -3,6 +3,7 @@ using Emgu.CV.Structure;
 using System;
 using System.Diagnostics;
 using System.Drawing.Imaging;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace SzsaVibeAlgorithm
@@ -11,19 +12,22 @@ namespace SzsaVibeAlgorithm
     {
         VideoCapture capture;
         bool isPlaying = false;
+        string curFileName = String.Empty;
         int currentFrameNum;
         Mat currentFrame;
         int totalFrames;
         int fps;
         int width;
         int height;
+        double curProgressPercent;
 
-        const int numOfSamples = 20;
-        const int radius = 20;
-        const int minCardinality = 2;
-        const int updateFactor = 16;
+        const sbyte numOfSamples = 20;
+        const sbyte radius = 20;
+        const sbyte minCardinality = 2;
+        const sbyte updateFactor = 16;
 
-        const int numOfPixelsToCompare = 20000;
+        const sbyte maxNoise = 3;
+        const double pixelPercent = 0.02;
 
         Color[,,] bgModelBuffer;
         int[][,] binaryMaskArray;
@@ -66,26 +70,29 @@ namespace SzsaVibeAlgorithm
                     Rectangle rect = new Rectangle(0, 0, width, height);
                     BitmapData bmpData = bitmapFrame.LockBits(rect, ImageLockMode.ReadWrite, bitmapFrame.PixelFormat);
 
+                    // Check for camera movement
                     if (isFirstFrame)
-                        bgModelBuffer = InitBgModels(bmpData);  
+                        bgModelBuffer = InitBgModels(bmpData);
                     else
-                        if(CameraMoved(bmpData))
+                        if (CameraMoved(bmpData))
                             bgModelBuffer = InitBgModels(bmpData);
 
-                    // Classify frame into binary mask
-                    Debug.WriteLine($"Classifying frame {currentFrameNum + 1} / {totalFrames} " +
-                                    $"({Math.Round(currentFrameNum / (double)totalFrames * 100, 2)}%)");
+                    // Print progress
+                    curProgressPercent = (currentFrameNum + 1) / (double)totalFrames * 100;
+                    Debug.WriteLine($"Classifying frame {currentFrameNum+1} / {totalFrames} " +
+                                    $"({Math.Round(curProgressPercent, 2)}%)");
 
-                    int [,] binaryMask = ClassifyFrame(bmpData);
+                    // Classify frame into binary mask
+                    int[,] binaryMask = ClassifyFrame(bmpData);
                     binaryMaskArray[currentFrameNum] = binaryMask;
 
                     // Update the model
                     UpdateBgModel(bmpData);
 
-                // Unlock bitmap
-                bitmapFrame.UnlockBits(bmpData);
+                    // Unlock bitmap
+                    bitmapFrame.UnlockBits(bmpData);
 
-                currentFrameNum += 1;
+                    currentFrameNum += 1;
                 }
 
                 stopwatch.Stop();
@@ -100,11 +107,12 @@ namespace SzsaVibeAlgorithm
                 Debug.WriteLine(ex.Message);
             }
         }
+
         private void WriteVideo(int[][,] frames)
         {
 
             // Create a VideoWriter to save the frames as a video
-            using VideoWriter writer = new VideoWriter("output.mp4", VideoWriter.Fourcc('X', '2', '6', '4'), fps, new Size(width, height), true);
+            using VideoWriter writer = new VideoWriter($"{curFileName.Split('.')[0]}_vibe_{DateTime.Now:yyyy_MM_dd_HH_mm_ss}.mp4", VideoWriter.Fourcc('X', '2', '6', '4'), fps, new Size(width, height), true);
 
             // Loop through each frame and convert the 2D int array into an Image<Rgb, byte>
             for (int i = 0; i < frames.Length; i++)
@@ -141,9 +149,9 @@ namespace SzsaVibeAlgorithm
             // Loop through each pixel in the Bitmap
             Parallel.For(0, height, y =>
             {
-                for(int x = 0; x < width; x++)
+                for (int x = 0; x < width; x++)
                 {
-                    //int curMemPos = 0;
+                    int curMemPos = 0;
                     int currentMatches = 0;
 
                     for (int i = 0; i < numOfSamples; i++)
@@ -168,13 +176,12 @@ namespace SzsaVibeAlgorithm
                             // Classify pixel as background and break
                             binaryMask[x, y] = 0;
 
-                            /*
-                            // TODO: SWAP MATCHES TO FIRST POSITIONS OF BUFFER?
-                            Color swap = bgModelBuffer[curMemPos, x,y];
-                            bgModelBuffer[curMemPos, x,y] = bgModelPixel;
+
+                            // Swap matches to first pos. of buffer
+                            Color swap = bgModelBuffer[curMemPos, x, y];
+                            bgModelBuffer[curMemPos, x, y] = bgModelPixel;
                             bgModelBuffer[i, x, y] = swap;
                             curMemPos += 1;
-                            */
 
                             break;
                         }
@@ -212,11 +219,6 @@ namespace SzsaVibeAlgorithm
             return Color.FromArgb(red, green, blue);
         }
 
-        private void SwapBuffer(VibeModel model)
-        {
-            throw new NotImplementedException();
-        }
-
         private Color[,,] InitBgModels(BitmapData bmpData)
         {
             Color[,,] bgModelArray = new Color[numOfSamples, width, height];
@@ -247,8 +249,6 @@ namespace SzsaVibeAlgorithm
 
         private void UpdateBgModel(BitmapData bmpData)
         {
-            //TODO: Optimize
-
             int randomUpdateChance = new Random().Next(1, updateFactor + 1);
             if (randomUpdateChance == 1)
             {
@@ -293,7 +293,7 @@ namespace SzsaVibeAlgorithm
 
             int nx, ny;
 
-            for(int i = 0; i < dx.Length; i++)
+            for (int i = 0; i < dx.Length; i++)
             {
                 nx = x + dx[i];
                 ny = y + dy[i];
@@ -310,7 +310,7 @@ namespace SzsaVibeAlgorithm
             int rx = x + dx[randomOffset];
             int ry = y + dy[randomOffset];
 
-            return Tuple.Create(rx, ry); 
+            return Tuple.Create(rx, ry);
 
         }
 
@@ -318,8 +318,6 @@ namespace SzsaVibeAlgorithm
         {
 
             Random random = new();
-
-            int maxNoise = 3;
             int red = color.R;
             int green = color.G;
             int blue = color.B;
@@ -342,57 +340,26 @@ namespace SzsaVibeAlgorithm
 
         public bool CameraMoved(BitmapData bitmapData)
         {
-            int width = bitmapData.Width;
-            int height = bitmapData.Height;
+            int stepx = (int)(width * pixelPercent);
+            int stepy = (int)(height * pixelPercent);
 
-            bool cameraMoved = true;
-
-            Random random = new();
-            //Parallel.For(0, numOfPixelsToCompare, i =>
-            //{
-            for(int i = 0; numOfPixelsToCompare > i; i++)
+            for(int y = 0; y < height; y+=stepy)
             {
-                int x = random.Next(0, width);
-                int y = random.Next(0, height);
-
-                // Get color from the bitmapData
-                Color bitmapColor = GetPixelColor(bitmapData, x, y);
-
-                Color bgColor = bgModelBuffer[0, x, y];
-
-                // Compare with corresponding Color object from bgModel
-                if (bitmapColor == bgModelBuffer[0, x, y])
+                for (int x = 0; x < width; x+=stepx)
                 {
-                    cameraMoved = false;
-                    break;
+                    // Get color from the bitmapData
+                    Color bitmapColor = GetPixelColor(bitmapData, x, y);
+
+                    // Compare with corresponding Color object from bgModel
+                    if (bitmapColor == bgModelBuffer[0, x, y])
+                    {
+                        return false;
+                    }
                 }
             }
 
-            if (cameraMoved)
-            {
-                Debug.WriteLine("Camera moved");
-            }
-            return cameraMoved;
-        }
-
-        private void BtnPlay_Click_1(object sender, EventArgs e)
-        {
-            if (capture != null)
-            {
-                isPlaying = true;
-                PlayVideo();
-            }
-
-            else
-                isPlaying = false;
-        }
-
-        private void BtnStop_Click_1(object sender, EventArgs e)
-        {
-            isPlaying = false;
-            currentFrameNum = 0;
-            pictureBox1.Image = null;
-            pictureBox1.Invalidate();
+            Debug.WriteLine($"Camera moved at frame {currentFrameNum}, time: {Math.Round((curProgressPercent/100)*(totalFrames/fps),2)}s");
+            return true;
         }
 
         private void selectFileButton_Click(object sender, EventArgs e)
@@ -405,6 +372,7 @@ namespace SzsaVibeAlgorithm
                 capture = new VideoCapture(ofd.FileName);
                 totalFrames = Convert.ToInt32(capture.Get(Emgu.CV.CvEnum.CapProp.FrameCount));
                 fps = Convert.ToInt32(capture.Get(Emgu.CV.CvEnum.CapProp.Fps));
+                curFileName = ofd.FileName;
                 PlayVideo();
             }
         }
