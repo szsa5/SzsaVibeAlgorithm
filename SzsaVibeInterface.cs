@@ -24,7 +24,7 @@ namespace SzsaVibeAlgorithm
         const sbyte numOfSamples = 20;
         const sbyte radius = 20;
         const sbyte minCardinality = 2;
-        const sbyte updateFactor = 16;
+        const sbyte updateFactor = 5;
 
         const sbyte maxNoise = 3;
         const double pixelPercent = 0.02;
@@ -249,32 +249,31 @@ namespace SzsaVibeAlgorithm
 
         private void UpdateBgModel(BitmapData bmpData)
         {
-            int randomUpdateChance = new Random().Next(1, updateFactor + 1);
+            int randomUpdateChance = Random.Shared.Next(1, updateFactor + 1);
             if (randomUpdateChance == 1)
             {
-                int randomSampleIndex = new Random().Next(0, numOfSamples);
                 // Loop through each pixel in the Bitmap
                 Parallel.For(0, height, y =>
                 {
                     for (int x = 0; x < width; x++)
                     {
-                        if (binaryMaskArray[currentFrameNum][x, y] == 0)
+                        if (binaryMaskArray[currentFrameNum][x, y] == 0) {
+                            int randomSampleIndex = Random.Shared.Next(0, numOfSamples);
                             bgModelBuffer[randomSampleIndex, x, y] = GetPixelColor(bmpData, x, y);
-                        else
-                            return;
+                        
+                            int randomEightUpdateChance = Random.Shared.Next(1, updateFactor + 1);
+                            if (randomEightUpdateChance == 1)
+                            {
+                                // Choose a random sample value from the 8-neighbourhood
+                                Tuple<int, int> randomNeighborOffset = GetRandomNeighborOffset(height, width, x, y);
+                                int eightX = randomNeighborOffset.Item1;
+                                int eightY = randomNeighborOffset.Item2;
+                                Color eightPixel = GetPixelColor(bmpData, eightX, eightY);
 
-                        int randomEightUpdateChance = new Random().Next(1, updateFactor + 1);
-
-                        if (randomEightUpdateChance == 1)
-                        {
-                            // Choose a random sample value from the 8-neighbourhood
-                            Tuple<int, int> randomNeighborOffset = GetRandomNeighborOffset(height, width, x, y);
-                            int eightX = randomNeighborOffset.Item1;
-                            int eightY = randomNeighborOffset.Item2;
-                            Color eightPixel = GetPixelColor(bmpData, eightX, eightY);
-
-                            // Replace value chosen from the bg buffer by pixel value chosen from the 8-neighbourhood
-                            bgModelBuffer[randomSampleIndex, eightX, eightY] = eightPixel;
+                                randomSampleIndex = Random.Shared.Next(0, numOfSamples);
+                                // Replace value chosen from the bg buffer by pixel value chosen from the 8-neighbourhood
+                                bgModelBuffer[randomSampleIndex, eightX, eightY] = eightPixel;
+                            }
                         }
                     }
                 });
@@ -304,7 +303,7 @@ namespace SzsaVibeAlgorithm
                 }
             }
 
-            int randomOffsetIndex = random.Next(validOffsets.Count);
+            int randomOffsetIndex = Random.Shared.Next(validOffsets.Count);
             int randomOffset = validOffsets[randomOffsetIndex];
 
             int rx = x + dx[randomOffset];
@@ -322,12 +321,12 @@ namespace SzsaVibeAlgorithm
             int green = color.G;
             int blue = color.B;
 
-            if (random.Next(2) == 0)
+            if (Random.Shared.Next(2) == 0)
             {
                 // Add random noise to each channel
-                red += random.Next(-maxNoise, maxNoise + 1);
-                green += random.Next(-maxNoise, maxNoise + 1);
-                blue += random.Next(-maxNoise, maxNoise + 1);
+                red += Random.Shared.Next(-maxNoise, maxNoise + 1);
+                green += Random.Shared.Next(-maxNoise, maxNoise + 1);
+                blue += Random.Shared.Next(-maxNoise, maxNoise + 1);
 
                 // Make sure the color values stay within the valid range of 0-255
                 red = Math.Max(0, Math.Min(255, red));
